@@ -126,8 +126,12 @@ def create_network_spec(client_factory, vif_info):
     network_spec = client_factory.create('ns0:VirtualDeviceConfigSpec')
     network_spec.operation = "add"
 
-    # Get the recommended card type for the VM based on the guest OS of the VM
-    net_device = client_factory.create('ns0:VirtualPCNet32')
+    # Keep compatible with other Hyper vif model parameter.
+    if vif_info['vif_model'] == "e1000":
+        vif_info['vif_model'] = "VirtualE1000"
+
+    vif = 'ns0:' + vif_info['vif_model']
+    net_device = client_factory.create(vif)
 
     # NOTE(asomya): Only works on ESXi if the portgroup binding is set to
     # ephemeral. Invalid configuration if set to static and the NIC does
@@ -553,7 +557,6 @@ def get_datastore_ref_and_name(session, cluster=None, host=None):
                                 "Datastore", data_store_mors,
                                 ["summary.type", "summary.name",
                                  "summary.capacity", "summary.freeSpace"])
-
     for elem in data_stores:
         ds_name = None
         ds_type = None
@@ -570,8 +573,6 @@ def get_datastore_ref_and_name(session, cluster=None, host=None):
                 ds_free = prop.val
         # Local storage identifier
         if ds_type == "VMFS" or ds_type == "NFS":
-            data_store_name = ds_name
-            return elem.obj, data_store_name, ds_cap, ds_free
+            return elem.obj, ds_name, ds_cap, ds_free
 
-    if data_store_name is None:
         raise exception.DatastoreNotFound()

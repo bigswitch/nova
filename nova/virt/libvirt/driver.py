@@ -2730,20 +2730,28 @@ class LibvirtDriver(driver.ComputeDriver):
                 mountpoint = bdm['device_name']
                 if mountpoint.startswith('/dev/'):
                     mountpoint = mountpoint[5:]
+                volume_id = bdm['volume_id']
 
                 LOG.debug(_("Trying to get stats for the volume %s"),
-                            bdm['volume_id'])
+                            volume_id)
                 vol_stats = self.block_stats(instance['name'], mountpoint)
 
                 if vol_stats:
-                    rd_req, rd_bytes, wr_req, wr_bytes, flush_ops = vol_stats
-                    vol_usage.append(dict(volume=bdm['volume_id'],
-                                          instance=instance,
-                                          rd_req=rd_req,
-                                          rd_bytes=rd_bytes,
-                                          wr_req=wr_req,
-                                          wr_bytes=wr_bytes,
-                                          flush_operations=flush_ops))
+                    stats = dict(volume=volume_id,
+                                 instance=instance,
+                                 rd_req=vol_stats[0],
+                                 rd_bytes=vol_stats[1],
+                                 wr_req=vol_stats[2],
+                                 wr_bytes=vol_stats[3],
+                                 flush_operations=vol_stats[4])
+                    LOG.debug(
+                        _("Got volume usage stats for the volume=%(volume)s,"
+                          " instance=%(instance)s, rd_req=%(rd_req)d,"
+                          " rd_bytes=%(rd_bytes)d, wr_req=%(wr_req)d,"
+                          " wr_bytes=%(wr_bytes)d")
+                        % stats)
+                    vol_usage.append(stats)
+
         return vol_usage
 
     def block_stats(self, instance_name, disk):
@@ -2756,7 +2764,8 @@ class LibvirtDriver(driver.ComputeDriver):
         except libvirt.libvirtError as e:
             errcode = e.get_error_code()
             LOG.info(_("Getting block stats failed, device might have "
-                       "been detached. Code=%(errcode)s Error=%(e)s")
+                       "been detached. Instance=%(instance_name)s "
+                       "Disk=%(disk)s Code=%(errcode)s Error=%(e)s")
                        % locals())
         except exception.InstanceNotFound:
             LOG.info(_("Could not find domain in libvirt for instance %s. "
@@ -2871,15 +2880,14 @@ class LibvirtDriver(driver.ComputeDriver):
         filename = dest_check_data["filename"]
         self._cleanup_shared_storage_test_file(filename)
 
-    def check_can_live_migrate_source(self, ctxt, instance_ref,
-                                      dest_check_data):
+    def check_can_live_migrate_source(self, ctxt, instance, dest_check_data):
         """Check if it is possible to execute live migration.
 
         This checks if the live migration can succeed, based on the
         results from check_can_live_migrate_destination.
 
         :param context: security context
-        :param instance_ref: nova.db.sqlalchemy.models.Instance
+        :param instance: nova.db.sqlalchemy.models.Instance
         :param dest_check_data: result of check_can_live_migrate_destination
         """
         # Checking shared storage connectivity
@@ -2896,7 +2904,7 @@ class LibvirtDriver(driver.ComputeDriver):
                 reason = _("Block migration can not be used "
                            "with shared storage.")
                 raise exception.InvalidLocalStorage(reason=reason, path=source)
-            self._assert_dest_node_has_enough_disk(ctxt, instance_ref,
+            self._assert_dest_node_has_enough_disk(ctxt, instance,
                                     dest_check_data['disk_available_mb'],
                                     dest_check_data['disk_over_commit'])
 
@@ -2905,6 +2913,14 @@ class LibvirtDriver(driver.ComputeDriver):
                        "without shared storage.")
             raise exception.InvalidSharedStorage(reason=reason, path=source)
         dest_check_data.update({"is_shared_storage": shared})
+
+        # NOTE(mikal): include the instance directory name here because it
+        # doesn't yet exist on the destination but we want to force that
+        # same name to be used
+        instance_path = libvirt_utils.get_instance_path(instance,
+                                                        relative=True)
+        dest_check_data['instance_relative_path'] = instance_path
+
         return dest_check_data
 
     def _assert_dest_node_has_enough_disk(self, context, instance_ref,
@@ -3155,19 +3171,28 @@ class LibvirtDriver(driver.ComputeDriver):
         is_shared_storage = True
         is_volume_backed = False
         is_block_migration = True
+        instance_relative_path = None
         if migrate_data:
             is_shared_storage = migrate_data.get('is_shared_storage', True)
             is_volume_backed = migrate_data.get('is_volume_backed', False)
             is_block_migration = migrate_data.get('block_migration', True)
+            instance_relative_path = migrate_data.get('instance_relative_path')
 
-        if is_volume_backed and not (is_block_migration or is_shared_storage):
+        if not is_shared_storage:
+            # NOTE(mikal): this doesn't use libvirt_utils.get_instance_path
+            # because we are ensuring that the same instance directory name
+            # is used as was at the source
+            if instance_relative_path:
+                instance_dir = os.path.join(CONF.instances_path,
+                                            instance_relative_path)
+            else:
+                instance_dir = libvirt_utils.get_instance_path(instance)
 
-            # Create the instance directory on destination compute node.
-            instance_dir = libvirt_utils.get_instance_path(instance)
             if os.path.exists(instance_dir):
                 raise exception.DestinationDiskExists(path=instance_dir)
             os.mkdir(instance_dir)
 
+        if is_volume_backed and not (is_block_migration or is_shared_storage):
             # Touch the console.log file, required by libvirt.
             console_file = self._get_console_log_path(instance)
             libvirt_utils.file_open(console_file, 'a').close()

@@ -116,11 +116,25 @@ class VMwareAPIVMTestCase(test.TestCase):
         self.assertEquals(vm.get("summary.config.memorySizeMB"),
                           self.type_data['memory_mb'])
 
+        self.assertEqual(
+            vm.get("config.hardware.device")[2].device.obj_name,
+            "ns0:VirtualE1000")
         # Check that the VM is running according to Nova
         self.assertEquals(vm_info['state'], power_state.RUNNING)
 
         # Check that the VM is running according to vSphere API.
         self.assertEquals(vm.get("runtime.powerState"), 'poweredOn')
+
+        found_vm_uuid = False
+        found_iface_id = False
+        for c in vm.get("config.extraConfig"):
+            if (c.key == "nvp.vm-uuid" and c.value == self.instance['uuid']):
+                found_vm_uuid = True
+            if (c.key == "nvp.iface-id.0" and c.value == "vif-xxx-yyy-zzz"):
+                found_iface_id = True
+
+        self.assertTrue(found_vm_uuid)
+        self.assertTrue(found_iface_id)
 
     def _check_vm_info(self, info, pwr_state=power_state.RUNNING):
         """
@@ -141,12 +155,6 @@ class VMwareAPIVMTestCase(test.TestCase):
         self._create_vm()
         instances = self.conn.list_instances()
         self.assertEquals(len(instances), 1)
-
-    def test_list_interfaces(self):
-        self._create_vm()
-        interfaces = self.conn.list_interfaces(1)
-        self.assertEquals(len(interfaces), 1)
-        self.assertEquals(interfaces[0], 4000)
 
     def test_spawn(self):
         self._create_vm()
@@ -335,6 +343,9 @@ class VMwareAPIHostTestCase(test.TestCase):
         self.assertEquals(stats['disk_used'], 1024 - 500)
         self.assertEquals(stats['host_memory_total'], 1024)
         self.assertEquals(stats['host_memory_free'], 1024 - 500)
+        supported_instances = [('i686', 'vmware', 'hvm'),
+                               ('x86_64', 'vmware', 'hvm')]
+        self.assertEquals(stats['supported_instances'], supported_instances)
 
     def _test_host_action(self, method, action, expected=None):
         result = method('host', action)

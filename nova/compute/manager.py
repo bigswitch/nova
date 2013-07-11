@@ -483,7 +483,23 @@ class ComputeManager(manager.SchedulerDependentManager):
                 legacy_net_info[0][1].get('vif_type') is None):
             # Call to network API to get instance info, this will
             # force an update to the instance's info_cache
-            net_info = self._get_instance_nw_info(context, instance)
+            retry_time = 0
+            # Continue retrying until _get_instance_nw_info() succeeds.
+            while True:
+                try:
+                    net_info = self._get_instance_nw_info(context, instance)
+                    break
+                except Exception:
+                    # Retry in an exponential backoff fashion
+                    # capped at 60 seconds.
+                    if retry_time < 60:
+                        retry_time += 6
+                    LOG.exception(_("Error raised getting network info for "
+                                    "instance %(instance_uuid)s. Retrying "
+                                    "in %(retry_time)s seconds."),
+                                    {'instance_uuid': instance['uuid'],
+                                     'retry_time': retry_time})
+                    time.sleep(retry_time)
             legacy_net_info = self._legacy_nw_info(net_info)
         self.driver.plug_vifs(instance, legacy_net_info)
 
@@ -2064,6 +2080,11 @@ class ComputeManager(manager.SchedulerDependentManager):
             rt = self._get_resource_tracker(migration['source_node'])
             rt.confirm_resize(context, migration)
 
+            instance = self._instance_update(context, instance['uuid'],
+                                             vm_state=vm_states.ACTIVE,
+                                             task_state=None,
+                                             expected_task_state=None)
+
             self._notify_about_instance_usage(
                 context, instance, "resize.confirm.end",
                 network_info=network_info)
@@ -3268,10 +3289,18 @@ class ComputeManager(manager.SchedulerDependentManager):
                                             block_migration, block_device_info)
         # Restore instance state
         current_power_state = self._get_power_state(context, instance)
-        instance = self._instance_update(context, instance['uuid'],
-                host=self.host, power_state=current_power_state,
-                vm_state=vm_states.ACTIVE, task_state=None,
-                expected_task_state=task_states.MIGRATING)
+        node_name = None
+        try:
+            compute_node = self._get_compute_info(context, self.host)
+            node_name = compute_node['hypervisor_hostname']
+        except exception.NotFound:
+            LOG.exception(_('Failed to get compute_info for %s') % self.host)
+        finally:
+            instance = self._instance_update(context, instance['uuid'],
+                    host=self.host, power_state=current_power_state,
+                    vm_state=vm_states.ACTIVE, task_state=None,
+                    expected_task_state=task_states.MIGRATING,
+                    node=node_name)
 
         # NOTE(vish): this is necessary to update dhcp
         self.network_api.setup_networks_on_host(context, instance, self.host)
