@@ -29,7 +29,6 @@ from nova.network import quantumv2
 from nova.network.quantumv2 import api as quantumapi
 from nova.network.quantumv2 import constants
 from nova import test
-from nova import utils
 
 CONF = cfg.CONF
 
@@ -1362,4 +1361,3 @@ class TestQuantumv2Portbinding(TestQuantumv2Base):
         self.assertRaises(QUANTUM_CLIENT_EXCEPTION,
                           api.migrate_instance_finish,
                           self.context, self.instance, None)
-

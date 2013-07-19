@@ -247,7 +247,6 @@ class LibvirtGenericVIFDriver(LibvirtBaseVIFDriver):
 
         return conf
 
-
     def get_config_ivs(self, instance, network, mapping, image_meta):
         if self.get_firewall_required():
             return self.get_config_ivs_hybrid(instance, network,
@@ -417,7 +416,6 @@ class LibvirtGenericVIFDriver(LibvirtBaseVIFDriver):
                                        dev, iface_id, mapping['mac'],
                                        instance['uuid'])
 
-
     def plug_ivs_hybrid(self, instance, vif):
         """Plug using hybrid strategy
 
@@ -452,7 +450,6 @@ class LibvirtGenericVIFDriver(LibvirtBaseVIFDriver):
             self.plug_ivs_hybrid(instance, vif)
         else:
             self.plug_ivs_ethernet(instance, vif)
-
 
     def plug_802qbg(self, instance, vif):
         super(LibvirtGenericVIFDriver,
