@@ -36,6 +36,7 @@ from sqlalchemy.exc import NoSuchTableError
 from sqlalchemy import Integer
 from sqlalchemy import MetaData
 from sqlalchemy import or_
+from sqlalchemy.orm import contains_eager
 from sqlalchemy.orm import joinedload
 from sqlalchemy.orm import joinedload_all
 from sqlalchemy.schema import Table
@@ -1690,7 +1691,7 @@ def instance_get_all_by_filters(context, filters, sort_key, sort_dir,
     # For other filters that don't match this, we will do regexp matching
     exact_match_filter_names = ['project_id', 'user_id', 'image_ref',
                                 'vm_state', 'instance_type_id', 'uuid',
-                                'metadata']
+                                'metadata', 'task_state']
 
     # Filter the query
     query_prefix = exact_filter(query_prefix, models.Instance,
@@ -4346,8 +4347,16 @@ def aggregate_get(context, aggregate_id):
 
 @require_admin_context
 def aggregate_get_by_host(context, host, key=None):
-    query = _aggregate_get_query(context, models.Aggregate,
-            models.AggregateHost.host, host)
+    """Return rows that match host (mandatory) and metadata key (optional).
+
+    :param host matches host, and is required.
+    :param key Matches metadata key, if not None.
+    """
+    query = model_query(context, models.Aggregate)
+    query = query.options(joinedload('_hosts'))
+    query = query.options(joinedload('_metadata'))
+    query = query.join('_hosts')
+    query = query.filter(models.AggregateHost.host == host)
 
     if key:
         query = query.join("_metadata").filter(
@@ -4357,13 +4366,16 @@ def aggregate_get_by_host(context, host, key=None):
 
 @require_admin_context
 def aggregate_metadata_get_by_host(context, host, key=None):
-    query = model_query(context, models.Aggregate).join(
-            "_hosts").filter(models.AggregateHost.host == host).join(
-            "_metadata")
+    query = model_query(context, models.Aggregate)
+    query = query.join("_hosts")
+    query = query.join("_metadata")
+    query = query.filter(models.AggregateHost.host == host)
+    query = query.options(contains_eager("_metadata"))
 
     if key:
         query = query.filter(models.AggregateMetadata.key == key)
     rows = query.all()
+
     metadata = collections.defaultdict(set)
     for agg in rows:
         for kv in agg._metadata:
@@ -4373,9 +4385,13 @@ def aggregate_metadata_get_by_host(context, host, key=None):
 
 @require_admin_context
 def aggregate_host_get_by_metadata_key(context, key):
-    query = model_query(context, models.Aggregate).join(
-            "_metadata").filter(models.AggregateMetadata.key == key)
+    query = model_query(context, models.Aggregate)
+    query = query.join("_metadata")
+    query = query.filter(models.AggregateMetadata.key == key)
+    query = query.options(contains_eager("_metadata"))
+    query = query.options(joinedload("_hosts"))
     rows = query.all()
+
     metadata = collections.defaultdict(set)
     for agg in rows:
         for agghost in agg._hosts:

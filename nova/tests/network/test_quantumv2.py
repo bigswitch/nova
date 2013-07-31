@@ -22,12 +22,14 @@ from oslo.config import cfg
 from quantumclient.common import exceptions
 from quantumclient.v2_0 import client
 
+from nova.conductor import api as conductor_api
 from nova import context
 from nova import exception
 from nova.network import model
 from nova.network import quantumv2
 from nova.network.quantumv2 import api as quantumapi
 from nova.network.quantumv2 import constants
+from nova.openstack.common import jsonutils
 from nova import test
 
 CONF = cfg.CONF
@@ -376,6 +378,15 @@ class TestQuantumv2Base(test.TestCase):
                                           self.instance['uuid'],
                                           mox.IgnoreArg())
         port_data = number == 1 and self.port_data1 or self.port_data2
+        self.mox.StubOutWithMock(conductor_api.API,
+                                 'instance_get_by_uuid')
+        net_info_cache = []
+        for port in port_data:
+            net_info_cache.append({"network": {"id": port['network_id']}})
+        info_cache = {'info_cache': {'network_info':
+                                     jsonutils.dumps(net_info_cache)}}
+        api.conductor_api.instance_get_by_uuid(
+            mox.IgnoreArg(), mox.IgnoreArg()).AndReturn(info_cache)
         self.moxed_client.list_ports(
             tenant_id=self.instance['project_id'],
             device_id=self.instance['uuid']).AndReturn(
@@ -487,6 +498,16 @@ class TestQuantumv2(TestQuantumv2Base):
         quantumv2.get_client(mox.IgnoreArg(),
                              admin=True).MultipleTimes().AndReturn(
             self.moxed_client)
+        self.mox.StubOutWithMock(conductor_api.API,
+                                 'instance_get_by_uuid')
+        net_info_cache = []
+        for port in self.port_data3:
+            net_info_cache.append({"network": {"id": port['network_id']}})
+        info_cache = {'info_cache': {'network_info':
+                                     jsonutils.dumps(net_info_cache)}}
+
+        api.conductor_api.instance_get_by_uuid(
+            mox.IgnoreArg(), mox.IgnoreArg()).AndReturn(info_cache)
         self.mox.ReplayAll()
 
         nw_inf = api.get_instance_nw_info(self.context,
@@ -747,7 +768,18 @@ class TestQuantumv2(TestQuantumv2Base):
     def _test_deallocate_port_for_instance(self, number):
         port_data = number == 1 and self.port_data1 or self.port_data2
         self.moxed_client.delete_port(port_data[0]['id'])
+        self.mox.StubOutWithMock(conductor_api.API,
+                                 'instance_get_by_uuid')
+        net_info_cache = []
+        for port in port_data:
+            net_info_cache.append({"network": {"id": port['network_id']}})
+        info_cache = {'info_cache': {'network_info':
+                                     jsonutils.dumps(net_info_cache)}}
 
+        api = quantumapi.API()
+        api.conductor_api.instance_get_by_uuid(
+            mox.IgnoreArg(), mox.IgnoreArg()).AndReturn(info_cache)
+        nets = [port_data[0]['network_id']]
         quantumv2.get_client(mox.IgnoreArg(), admin=True).AndReturn(
             self.moxed_client)
         self.moxed_client.list_ports(
@@ -774,7 +806,6 @@ class TestQuantumv2(TestQuantumv2Base):
 
         self.mox.ReplayAll()
 
-        api = quantumapi.API()
         nwinfo = api.deallocate_port_for_instance(self.context, self.instance,
                                                   port_data[0]['id'])
         self.assertEqual(len(nwinfo), len(port_data[1:]))

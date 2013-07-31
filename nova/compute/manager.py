@@ -1595,8 +1595,20 @@ class ComputeManager(manager.SchedulerDependentManager):
                     LOG.info(_("disk not on shared storagerebuilding from:"
                                " '%s'") % str(image_ref))
 
-                instance = self._instance_update(
-                        context, instance['uuid'], host=self.host)
+                # NOTE(mriedem): On a recreate (evacuate), we need to update
+                # the instance's host and node properties to reflect it's
+                # destination node for the recreate.
+                node_name = None
+                try:
+                    compute_node = self._get_compute_info(context, self.host)
+                    node_name = compute_node['hypervisor_hostname']
+                except exception.NotFound:
+                    LOG.exception(_('Failed to get compute_info for %s') %
+                                  self.host)
+                finally:
+                    instance = self._instance_update(
+                            context, instance['uuid'], host=self.host,
+                            node=node_name)
 
             if image_ref:
                 image_meta = _get_image_meta(context, image_ref)
@@ -2112,7 +2124,8 @@ class ComputeManager(manager.SchedulerDependentManager):
             instance = self._instance_update(context, instance['uuid'],
                                              vm_state=vm_states.ACTIVE,
                                              task_state=None,
-                                             expected_task_state=None)
+                                             expected_task_state=[None,
+                                             task_states.DELETING])
 
             self._notify_about_instance_usage(
                 context, instance, "resize.confirm.end",
@@ -3907,7 +3920,8 @@ class ComputeManager(manager.SchedulerDependentManager):
             old_enough = (not instance['deleted_at'] or
                           timeutils.is_older_than(instance['deleted_at'],
                                                   interval))
-            soft_deleted = instance['vm_state'] == vm_states.SOFT_DELETED
+            soft_deleted = (instance['vm_state'] == vm_states.SOFT_DELETED and
+                            instance['task_state'] == None)
 
             if soft_deleted and old_enough:
                 capi = self.conductor_api

@@ -3072,6 +3072,27 @@ class LibvirtConnTestCase(test.TestCase):
                     "uuid": "875a8070-d0b9-4949-8b31-104d125c9a64"}
         conn.destroy(instance, [])
 
+    def test_destroy_timed_out(self):
+        mock = self.mox.CreateMock(libvirt.virDomain)
+        mock.ID()
+        mock.destroy().AndRaise(libvirt.libvirtError("timed out"))
+        self.mox.ReplayAll()
+
+        def fake_lookup_by_name(instance_name):
+            return mock
+
+        def fake_get_error_code(self):
+            return libvirt.VIR_ERR_OPERATION_TIMEOUT
+
+        conn = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
+        self.stubs.Set(conn, '_lookup_by_name', fake_lookup_by_name)
+        self.stubs.Set(libvirt.libvirtError, 'get_error_code',
+                fake_get_error_code)
+        instance = {"name": "instancename", "id": "instanceid",
+                    "uuid": "875a8070-d0b9-4949-8b31-104d125c9a64"}
+        self.assertRaises(exception.InstancePowerOffFailure,
+                conn.destroy, instance, [])
+
     def test_private_destroy_not_found(self):
         mock = self.mox.CreateMock(libvirt.virDomain)
         mock.ID()
@@ -3715,6 +3736,38 @@ class LibvirtConnTestCase(test.TestCase):
         fake_conf.driver_cache = 'fake'
         conn.set_cache_mode(fake_conf)
         self.assertEqual(fake_conf.driver_cache, 'fake')
+
+    def _test_shared_storage_detection(self, is_same):
+        conn = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), True)
+        self.mox.StubOutWithMock(conn, 'get_host_ip_addr')
+        self.mox.StubOutWithMock(utils, 'execute')
+        self.mox.StubOutWithMock(os.path, 'exists')
+        self.mox.StubOutWithMock(os, 'unlink')
+        conn.get_host_ip_addr().AndReturn('bar')
+        utils.execute('ssh', 'foo', 'touch', mox.IgnoreArg())
+        os.path.exists(mox.IgnoreArg()).AndReturn(is_same)
+        if is_same:
+            os.unlink(mox.IgnoreArg())
+        else:
+            utils.execute('ssh', 'foo', 'rm', mox.IgnoreArg())
+        self.mox.ReplayAll()
+        return conn._is_storage_shared_with('foo', '/path')
+
+    def test_shared_storage_detection_same_host(self):
+        self.assertTrue(self._test_shared_storage_detection(True))
+
+    def test_shared_storage_detection_different_host(self):
+        self.assertFalse(self._test_shared_storage_detection(False))
+
+    def test_shared_storage_detection_easy(self):
+        conn = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), True)
+        self.mox.StubOutWithMock(conn, 'get_host_ip_addr')
+        self.mox.StubOutWithMock(utils, 'execute')
+        self.mox.StubOutWithMock(os.path, 'exists')
+        self.mox.StubOutWithMock(os, 'unlink')
+        conn.get_host_ip_addr().AndReturn('foo')
+        self.mox.ReplayAll()
+        self.assertTrue(conn._is_storage_shared_with('foo', '/path'))
 
 
 class HostStateTestCase(test.TestCase):
@@ -4409,6 +4462,17 @@ class LibvirtUtilsTestCase(test.TestCase):
         result = libvirt_utils.get_iscsi_initiator()
         self.assertEqual(initiator, result)
 
+    def test_get_missing_iscsi_initiator(self):
+        self.mox.StubOutWithMock(utils, 'execute')
+        file_path = '/etc/iscsi/initiatorname.iscsi'
+        utils.execute('cat', file_path, run_as_root=True).AndRaise(
+            exception.FileNotFound(file_path=file_path)
+        )
+        # Start test
+        self.mox.ReplayAll()
+        result = libvirt_utils.get_iscsi_initiator()
+        self.assertIsNone(result)
+
     def test_create_image(self):
         self.mox.StubOutWithMock(utils, 'execute')
         utils.execute('qemu-img', 'create', '-f', 'raw',
@@ -4735,6 +4799,7 @@ class LibvirtDriverTestCase(test.TestCase):
         .migrate_disk_and_power_off. """
 
         self.counter = 0
+        self.checked_shared_storage = False
 
         def fake_get_instance_disk_info(instance, xml=None):
             return '[]'
@@ -4753,11 +4818,17 @@ class LibvirtDriverTestCase(test.TestCase):
         def fake_os_path_exists(path):
             return True
 
+        def fake_is_storage_shared(dest, inst_base):
+            self.checked_shared_storage = True
+            return False
+
         self.stubs.Set(self.libvirtconnection, 'get_instance_disk_info',
                        fake_get_instance_disk_info)
         self.stubs.Set(self.libvirtconnection, '_destroy', fake_destroy)
         self.stubs.Set(self.libvirtconnection, 'get_host_ip_addr',
                        fake_get_host_ip_addr)
+        self.stubs.Set(self.libvirtconnection, '_is_storage_shared_with',
+                       fake_is_storage_shared)
         self.stubs.Set(utils, 'execute', fake_execute)
         self.stubs.Set(os.path, 'exists', fake_os_path_exists)
 
