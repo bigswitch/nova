@@ -1247,18 +1247,21 @@ def delete_ovs_vif_port(bridge, dev):
     utils.execute('ip', 'link', 'delete', dev,
                   run_as_root=True)
 
+
 def create_ivs_vif_port(bridge, dev, iface_id, mac, instance_id):
-    bridge='indigo' #only one bridge supported by ivs
+    bridge = 'indigo'  # only one bridge supported by ivs
     utils.execute('ivs-ctl', 'add-port',
                   bridge, dev,
                   run_as_root=True)
 
+
 def delete_ivs_vif_port(bridge, dev):
-    bridge='indigo' #only one bridge supported by ivs
+    bridge = 'indigo'  # only one bridge supported by ivs
     utils.execute('ivs-ctl', 'del-port', bridge, dev,
                   run_as_root=True)
     utils.execute('ip', 'link', 'delete', dev,
                   run_as_root=True)
+
 
 def create_tap_dev(dev, mac_address=None):
     if not device_exists(dev):

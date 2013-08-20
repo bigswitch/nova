@@ -440,7 +440,6 @@ class LibvirtVifTestCase(test.TestCase):
         script = node.find("script").get("path")
         self.assertEquals(script, "")
 
-
     def _check_ovs_ethernet_driver(self, d, net, mapping, dev_prefix):
         self.flags(firewall_driver="nova.virt.firewall.NoopFirewallDriver")
         xml = self._get_instance_xml(d, net, mapping)
@@ -458,7 +457,6 @@ class LibvirtVifTestCase(test.TestCase):
         self.assertEqual(mac, self.mapping_ovs['mac'])
         script = node.find("script").get("path")
         self.assertEquals(script, "")
-
 
     def test_ovs_ethernet_driver_legacy(self):
         def get_connection():
@@ -625,7 +623,6 @@ class LibvirtVifTestCase(test.TestCase):
                                           self.net_ovs,
                                           self.mapping_ivs,
                                           br_want)
-
 
     def test_generic_8021qbh_driver(self):
         def get_connection():
