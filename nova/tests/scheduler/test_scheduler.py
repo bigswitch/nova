@@ -36,6 +36,7 @@ from nova.image import glance
 from nova.openstack.common import jsonutils
 from nova.openstack.common.notifier import api as notifier
 from nova.openstack.common import rpc
+from nova.openstack.common.rpc import common as rpc_common
 from nova.scheduler import driver
 from nova.scheduler import manager
 from nova import servicegroup
@@ -64,6 +65,12 @@ class SchedulerManagerTestCase(test.TestCase):
         self.fake_args = (1, 2, 3)
         self.fake_kwargs = {'cat': 'meow', 'dog': 'woof'}
         fake_instance_actions.stub_out_action_events(self.stubs)
+
+    def stub_out_client_exceptions(self):
+        def passthru(exceptions, func, *args, **kwargs):
+            return func(*args, **kwargs)
+
+        self.stubs.Set(rpc_common, 'catch_client_exception', passthru)
 
     def test_1_correct_init(self):
         # Correct scheduler driver
@@ -231,6 +238,7 @@ class SchedulerManagerTestCase(test.TestCase):
                                 mox.IgnoreArg())
 
         self.mox.ReplayAll()
+        self.stub_out_client_exceptions()
         self.assertRaises(exception.NoValidHost,
                           self.manager.live_migration,
                           self.context, inst, dest, block_migration,
@@ -263,6 +271,7 @@ class SchedulerManagerTestCase(test.TestCase):
                                 mox.IgnoreArg())
 
         self.mox.ReplayAll()
+        self.stub_out_client_exceptions()
         self.assertRaises(exception.ComputeServiceUnavailable,
                           self.manager.live_migration,
                           self.context, inst, dest, block_migration,
@@ -786,6 +795,29 @@ class SchedulerTestCase(test.TestCase):
                         'image': self.image_service.show(self.context,
                                                          instance['image_ref'])
                         }
+        ignore_hosts = [instance['host']]
+        filter_properties = {'ignore_hosts': ignore_hosts}
+
+        instance_types.extract_instance_type(instance).AndReturn({})
+        self.driver.select_hosts(self.context, request_spec,
+                                 filter_properties).AndReturn(['fake_host2'])
+
+        self.mox.ReplayAll()
+        result = self.driver._live_migration_dest_check(self.context, instance,
+                                                        None, ignore_hosts)
+        self.assertEqual('fake_host2', result)
+
+    def test_live_migration_dest_check_no_image(self):
+        instance = self._live_migration_instance()
+        instance['image_ref'] = ''
+
+        # Confirm dest is picked by scheduler if not set.
+        self.mox.StubOutWithMock(self.driver, 'select_hosts')
+        self.mox.StubOutWithMock(instance_types, 'extract_instance_type')
+
+        request_spec = {'instance_properties': instance,
+                        'instance_type': {},
+                        'instance_uuids': [instance['uuid']]}
         ignore_hosts = [instance['host']]
         filter_properties = {'ignore_hosts': ignore_hosts}
 

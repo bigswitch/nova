@@ -728,6 +728,46 @@ class TestSecurityGroupRules(test.TestCase):
         self.assertEquals(security_group_rule['from_port'], 81)
         self.assertEquals(security_group_rule['to_port'], 81)
 
+    def test_create_none_value_from_to_port(self):
+        rule = {'parent_group_id': self.sg1['id'],
+                'group_id': self.sg1['id']}
+        req = fakes.HTTPRequest.blank('/v2/fake/os-security-group-rules')
+        res_dict = self.controller.create(req, {'security_group_rule': rule})
+        security_group_rule = res_dict['security_group_rule']
+        self.assertEquals(security_group_rule['from_port'], None)
+        self.assertEquals(security_group_rule['to_port'], None)
+        self.assertEquals(security_group_rule['group']['name'], 'test')
+        self.assertEquals(security_group_rule['parent_group_id'],
+                          self.sg1['id'])
+
+    def test_create_none_value_from_to_port_icmp(self):
+        rule = {'parent_group_id': self.sg1['id'],
+                'group_id': self.sg1['id'],
+                'ip_protocol': 'ICMP'}
+        req = fakes.HTTPRequest.blank('/v2/fake/os-security-group-rules')
+        res_dict = self.controller.create(req, {'security_group_rule': rule})
+        security_group_rule = res_dict['security_group_rule']
+        self.assertEquals(security_group_rule['ip_protocol'], 'ICMP')
+        self.assertEquals(security_group_rule['from_port'], -1)
+        self.assertEquals(security_group_rule['to_port'], -1)
+        self.assertEquals(security_group_rule['group']['name'], 'test')
+        self.assertEquals(security_group_rule['parent_group_id'],
+                          self.sg1['id'])
+
+    def test_create_none_value_from_to_port_tcp(self):
+        rule = {'parent_group_id': self.sg1['id'],
+                'group_id': self.sg1['id'],
+                'ip_protocol': 'TCP'}
+        req = fakes.HTTPRequest.blank('/v2/fake/os-security-group-rules')
+        res_dict = self.controller.create(req, {'security_group_rule': rule})
+        security_group_rule = res_dict['security_group_rule']
+        self.assertEquals(security_group_rule['ip_protocol'], 'TCP')
+        self.assertEquals(security_group_rule['from_port'], 1)
+        self.assertEquals(security_group_rule['to_port'], 65535)
+        self.assertEquals(security_group_rule['group']['name'], 'test')
+        self.assertEquals(security_group_rule['parent_group_id'],
+                          self.sg1['id'])
+
     def test_create_by_invalid_cidr_json(self):
         rule = security_group_rule_template(
                 ip_protocol="tcp",
@@ -1069,6 +1109,20 @@ class TestSecurityGroupRules(test.TestCase):
                           self.parent_security_group['id'])
         self.assertEquals(security_group_rule['ip_range']['cidr'],
                           "0.0.0.0/0")
+
+    def test_create_rule_cidr_ipv6_allow_all(self):
+        rule = security_group_rule_template(cidr='::/0',
+                                            parent_group_id=self.sg2['id'])
+
+        req = fakes.HTTPRequest.blank('/v2/fake/os-security-group-rules')
+        res_dict = self.controller.create(req, {'security_group_rule': rule})
+
+        security_group_rule = res_dict['security_group_rule']
+        self.assertNotEquals(security_group_rule['id'], 0)
+        self.assertEquals(security_group_rule['parent_group_id'],
+                          self.parent_security_group['id'])
+        self.assertEquals(security_group_rule['ip_range']['cidr'],
+                          "::/0")
 
     def test_create_rule_cidr_allow_some(self):
         rule = security_group_rule_template(cidr='15.0.0.0/8',

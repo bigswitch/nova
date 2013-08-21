@@ -571,7 +571,6 @@ class NetworkManager(manager.Manager):
             instance_id = instance_uuid
         instance_uuid = instance_id
 
-        host = kwargs.get('host')
         vifs = self.db.virtual_interface_get_by_instance(context,
                                                          instance_uuid)
         networks = {}
@@ -931,11 +930,27 @@ class NetworkManager(manager.Manager):
                     LOG.error(msg % address)
                     return
 
+                # NOTE(cfb): Call teardown before release_dhcp to ensure
+                #            that the IP can't be re-leased after a release
+                #            packet is sent.
+                self._teardown_network_on_host(context, network)
                 # NOTE(vish): This forces a packet so that the release_fixed_ip
                 #             callback will get called by nova-dhcpbridge.
                 self.driver.release_dhcp(dev, address, vif['address'])
 
-            self._teardown_network_on_host(context, network)
+                # NOTE(yufang521247): This is probably a failed dhcp fixed ip.
+                # DHCPRELEASE packet sent to dnsmasq would not trigger
+                # dhcp-bridge to run. Thus it is better to disassociate such
+                # fixed ip here.
+                fixed_ip_ref = self.db.fixed_ip_get_by_address(context,
+                                                               address)
+                if (instance_uuid == fixed_ip_ref['instance_uuid'] and
+                        not fixed_ip_ref.get('leased')):
+                    self.db.fixed_ip_disassociate(context, address)
+
+            else:
+                # We can't try to free the IP address so just call teardown
+                self._teardown_network_on_host(context, network)
 
         # Commit the reservations
         if reservations:
@@ -1113,13 +1128,13 @@ class NetworkManager(manager.Manager):
                         subnets_v4.append(next_subnet)
                         subnet = next_subnet
                     else:
-                        raise ValueError(_('cidr already in use'))
+                        raise exception.CidrConflict(_('cidr already in use'))
                 for used_subnet in used_subnets:
                     if subnet in used_subnet:
                         msg = _('requested cidr (%(cidr)s) conflicts with '
                                 'existing supernet (%(super)s)')
-                        raise ValueError(msg % {'cidr': subnet,
-                                                'super': used_subnet})
+                        raise exception.CidrConflict(
+                                  msg % {'cidr': subnet, 'super': used_subnet})
                     if used_subnet in subnet:
                         next_subnet = find_next(subnet)
                         if next_subnet:
@@ -1130,8 +1145,8 @@ class NetworkManager(manager.Manager):
                             msg = _('requested cidr (%(cidr)s) conflicts '
                                     'with existing smaller cidr '
                                     '(%(smaller)s)')
-                            raise ValueError(msg % {'cidr': subnet,
-                                                    'smaller': used_subnet})
+                            raise exception.CidrConflict(
+                                msg % {'cidr': subnet, 'smaller': used_subnet})
 
         networks = []
         subnets = itertools.izip_longest(subnets_v4, subnets_v6)
@@ -1331,8 +1346,10 @@ class NetworkManager(manager.Manager):
                                    project_only="allow_none")
 
     def _get_networks_by_uuids(self, context, network_uuids):
-        return self.db.network_get_all_by_uuids(context, network_uuids,
-                                                project_only="allow_none")
+        networks = self.db.network_get_all_by_uuids(context, network_uuids,
+                                                    project_only="allow_none")
+        networks.sort(key=lambda x: network_uuids.index(x['uuid']))
+        return networks
 
     def get_vifs_by_instance(self, context, instance_id):
         """Returns the vifs associated with an instance."""
@@ -1766,8 +1783,10 @@ class VlanManager(RPCAllocateFixedIP, floating_ips.FloatingIP, NetworkManager):
         # NOTE(vish): Don't allow access to networks with project_id=None as
         #             these are networks that haven't been allocated to a
         #             project yet.
-        return self.db.network_get_all_by_uuids(context, network_uuids,
-                                                project_only=True)
+        networks = self.db.network_get_all_by_uuids(context, network_uuids,
+                                                    project_only=True)
+        networks.sort(key=lambda x: network_uuids.index(x['uuid']))
+        return networks
 
     def _get_networks_for_instance(self, context, instance_id, project_id,
                                    requested_networks=None):
@@ -1867,7 +1886,7 @@ class VlanManager(RPCAllocateFixedIP, floating_ips.FloatingIP, NetworkManager):
                     self.db.fixed_ip_update(context, network['dhcp_server'],
                                             values)
             else:
-                self.driver.update_dhcp(context, dev, network)
+                self.driver.update_dhcp(elevated, dev, network)
 
     def _get_network_dict(self, network):
         """Returns the dict representing necessary and meta network fields."""
