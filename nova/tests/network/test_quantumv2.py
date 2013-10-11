@@ -528,6 +528,117 @@ class TestQuantumv2(TestQuantumv2Base):
         api._refresh_quantum_extensions_cache()
         self.assertEquals({'nvp-qos': {'name': 'nvp-qos'}}, api.extensions)
 
+    def test_populate_quantum_extension_values_rxtx_factor(self):
+        api = quantumapi.API()
+        self.moxed_client.list_extensions().AndReturn(
+            {'extensions': [{'name': 'nvp-qos'}]})
+        self.mox.ReplayAll()
+        instance_type = instance_types.get_default_instance_type()
+        instance_type['rxtx_factor'] = 1
+        sys_meta = utils.dict_to_metadata(
+            instance_types.save_instance_type_info({}, instance_type))
+        instance = {'system_metadata': sys_meta}
+        port_req_body = {'port': {}}
+        api._populate_quantum_extension_values(instance, port_req_body)
+        self.assertEquals(port_req_body['port']['rxtx_factor'], 1)
+
+    def _stub_allocate_for_instance(self, net_idx=1, **kwargs):
+        api = quantumapi.API()
+        self.mox.StubOutWithMock(api, '_get_instance_nw_info')
+        self.mox.StubOutWithMock(api, '_populate_quantum_extension_values')
+        # Net idx is 1-based for compatibility with existing unit tests
+        nets = self.nets[net_idx - 1]
+        ports = {}
+        fixed_ips = {}
+        macs = kwargs.get('macs')
+        if macs:
+            macs = set(macs)
+        req_net_ids = []
+        if 'requested_networks' in kwargs:
+            for id, fixed_ip, port_id in kwargs['requested_networks']:
+                if port_id:
+                    self.moxed_client.show_port(port_id).AndReturn(
+                        {'port': {'id': 'my_portid1',
+                                  'network_id': 'my_netid1',
+                                  'mac_address': 'my_mac1',
+                                  'device_id': kwargs.get('_device') and
+                                               'device_id1' or ''}})
+                    ports['my_netid1'] = self.port_data1[0]
+                    id = 'my_netid1'
+                    if macs is not None:
+                        macs.discard('my_mac1')
+                else:
+                    fixed_ips[id] = fixed_ip
+                req_net_ids.append(id)
+            expected_network_order = req_net_ids
+        else:
+            expected_network_order = [n['id'] for n in nets]
+        if kwargs.get('_break') == 'pre_list_networks':
+            self.mox.ReplayAll()
+            return api
+        search_ids = [net['id'] for net in nets if net['id'] in req_net_ids]
+
+        mox_list_network_params = dict(tenant_id=self.instance['project_id'],
+                                       shared=False)
+        if search_ids:
+            mox_list_network_params['id'] = mox.SameElementsAs(search_ids)
+        self.moxed_client.list_networks(
+            **mox_list_network_params).AndReturn({'networks': nets})
+
+        mox_list_network_params = dict(shared=True)
+        if search_ids:
+            mox_list_network_params['id'] = mox.SameElementsAs(search_ids)
+        self.moxed_client.list_networks(
+            **mox_list_network_params).AndReturn({'networks': []})
+        for net_id in expected_network_order:
+            if kwargs.get('_break') == 'net_id2':
+                self.mox.ReplayAll()
+                return api
+            port_req_body = {
+                'port': {
+                    'device_id': self.instance['uuid'],
+                    'device_owner': 'compute:nova',
+                },
+            }
+            port = ports.get(net_id, None)
+            if port:
+                port_id = port['id']
+                self.moxed_client.update_port(port_id,
+                                              MyComparator(port_req_body)
+                                              ).AndReturn(
+                                                  {'port': port})
+            else:
+                fixed_ip = fixed_ips.get(net_id)
+                if fixed_ip:
+                    port_req_body['port']['fixed_ips'] = [{'ip_address':
+                                                           fixed_ip}]
+                port_req_body['port']['network_id'] = net_id
+                port_req_body['port']['admin_state_up'] = True
+                port_req_body['port']['tenant_id'] = \
+                    self.instance['project_id']
+                if macs:
+                    port_req_body['port']['mac_address'] = macs.pop()
+                res_port = {'port': {'id': 'fake'}}
+                api._populate_quantum_extension_values(
+                     self.instance, port_req_body).AndReturn(None)
+
+                self.moxed_client.create_port(
+                    MyComparator(port_req_body)).AndReturn(res_port)
+
+            if kwargs.get('_break') == 'pre_get_instance_nw_info':
+                self.mox.ReplayAll()
+                return api
+        api._get_instance_nw_info(mox.IgnoreArg(),
+                                  self.instance,
+                                  networks=nets).AndReturn(
+                                        self._returned_nw_info)
+        self.mox.ReplayAll()
+        return api
+
+    def _allocate_for_instance(self, net_idx=1, **kwargs):
+        api = self._stub_allocate_for_instance(net_idx, **kwargs)
+        return api.allocate_for_instance(self.context, self.instance, **kwargs)
+
     def test_allocate_for_instance_1(self):
         # Allocate one port in one network env.
         self._allocate_for_instance(1)
@@ -743,6 +854,17 @@ class TestQuantumv2(TestQuantumv2Base):
         self._returned_nw_info = self.port_data1 + [new_port]
         nw_info = self._allocate_for_instance()
         self.assertEqual(nw_info, [new_port])
+
+    def test_allocate_for_instance_port_in_use(self):
+        # If a port is already in use, an exception should be raised.
+        requested_networks = [(None, None, 'my_portid1')]
+        api = self._stub_allocate_for_instance(
+            requested_networks=requested_networks,
+            _break='pre_list_networks',
+            _device=True)
+        self.assertRaises(exception.PortInUse,
+                          api.allocate_for_instance, self.context,
+                          self.instance, requested_networks=requested_networks)
 
     def _deallocate_for_instance(self, number):
         port_data = number == 1 and self.port_data1 or self.port_data2
