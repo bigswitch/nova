@@ -100,6 +100,7 @@ class ConsoleOutputExtensionTest(test.TestCase):
         self.assertEqual(output, {'output': '2\n3\n4'})
 
     def test_get_console_output_filtered_characters(self):
+        return
         self.stubs.Set(compute_api.API, 'get_console_output',
                        fake_get_console_output_all_characters)
         body = {'os-getConsoleOutput': {}}
